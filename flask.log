@@ -1,0 +1,34 @@
+2025-04-10 07:23:17,774 - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:5000
+2025-04-10 07:23:17,774 - INFO - [33mPress CTRL+C to quit[0m
+2025-04-10 07:23:18,072 - INFO -  * Restarting with watchdog (fsevents)
+2025-04-10 07:23:25,087 - WARNING -  * Debugger is active!
+2025-04-10 07:23:25,813 - INFO -  * Debugger PIN: 158-271-035
+2025-04-10 07:25:58,080 - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:5000
+2025-04-10 07:25:58,081 - INFO - [33mPress CTRL+C to quit[0m
+2025-04-10 07:25:58,086 - INFO -  * Restarting with watchdog (fsevents)
+2025-04-10 07:25:58,170 - WARNING -  * Debugger is active!
+2025-04-10 07:25:58,177 - INFO -  * Debugger PIN: 158-271-035
+2025-04-10 07:27:05,972 - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:5000
+2025-04-10 07:27:05,972 - INFO - [33mPress CTRL+C to quit[0m
+2025-04-10 07:27:05,974 - INFO -  * Restarting with watchdog (fsevents)
+2025-04-10 07:27:06,065 - WARNING -  * Debugger is active!
+2025-04-10 07:27:06,070 - INFO -  * Debugger PIN: 158-271-035
+2025-04-10 07:33:13,644 - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:5000
+2025-04-10 07:33:13,644 - INFO - [33mPress CTRL+C to quit[0m
+2025-04-10 07:34:18,038 - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:5000
+2025-04-10 07:34:18,038 - INFO - [33mPress CTRL+C to quit[0m
+2025-04-10 07:36:22,985 - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:5000
+2025-04-10 07:36:22,985 - INFO - [33mPress CTRL+C to quit[0m
+2025-04-10 07:38:59,530 - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:5000
+2025-04-10 07:38:59,530 - INFO - [33mPress CTRL+C to quit[0m
+2025-04-10 07:39:19,273 - INFO - Summarization request received.
+2025-04-10 07:39:19,274 - DEBUG - Attempting to parse JSON data.
+2025-04-10 07:39:19,274 - INFO - Text summarized successfully.
+2025-04-10 07:39:19,274 - INFO - 127.0.0.1 - - [10/Apr/2025 07:39:19] "POST /summarize HTTP/1.1" 200 -
