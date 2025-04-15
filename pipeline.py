@@ -1,19 +1,17 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse, FileResponse
-import os
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fpdf import FPDF
+from pathlib import Path
+from pydantic import BaseModel
 import shutil
 import sqlite3
-from pathlib import Path
-from fpdf import FPDF
+import os
 
-# Import functions from your existing modules
 from transcriber import transcribe_audio
 from summarizer import summarize_text
 
-# Initialize FastAPI app
 app = FastAPI()
-
-from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,136 +21,130 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# Set up directories
-UPLOAD_DIR = "uploads"
+UPLOAD_DIR = "temp_files"
 STATIC_DIR = "static"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(STATIC_DIR, exist_ok=True)
+Path(UPLOAD_DIR).mkdir(exist_ok=True)
+Path(STATIC_DIR).mkdir(exist_ok=True)
 
-# Database helper for meetings (for transcribed + summarized meetings)
-def get_meetings_db_connection():
-    # We assume that your meetings.db has a table called `meetings` with columns:
-    # id, transcript, summary, action_items, decisions
-    conn = sqlite3.connect('meetings.db')
-    conn.row_factory = sqlite3.Row  # to access rows as dicts
+def get_db_connection():
+    conn = sqlite3.connect("meetings.db")
+    conn.row_factory = sqlite3.Row
     return conn
 
-def insert_meeting(filename: str, transcript: str, summary: str, action_items: str = "", decisions: str = "") -> int:
-    conn = get_meetings_db_connection()
+def insert_meeting(transcript, summary, action_items="", decisions=""):
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO meetings (transcript, summary, action_items, decisions) VALUES (?, ?, ?, ?)",
-        (transcript, summary, action_items, decisions)
-    )
+    cursor.execute("""
+        INSERT INTO meetings (transcript, summary, action_items, decisions) 
+        VALUES (?, ?, ?, ?)
+    """, (transcript, summary, action_items, decisions))
     conn.commit()
     meeting_id = cursor.lastrowid
     conn.close()
     return meeting_id
 
-# -------------------------------
-# Endpoint: Process Meeting (Upload → Transcribe → Summarize → Store)
-# -------------------------------
 @app.post("/process_meeting")
 async def process_meeting(file: UploadFile = File(...)):
-    # Save the uploaded audio file to the UPLOAD_DIR
-    file_location = os.path.join(UPLOAD_DIR, file.filename)
-    with open(file_location, "wb") as f:
-        f.write(await file.read())
-    
-    # Transcribe the audio using your transcriber (supports multilingual input)
-    try:
-        transcript = transcribe_audio(file_location)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
-    
-    # Summarize the transcript using your summarizer
-    try:
-        summary = summarize_text(transcript)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Summarization failed: {str(e)}")
-    
-    # Insert into meetings database
-    meeting_id = insert_meeting(file.filename, transcript, summary, action_items="", decisions="")
+    file_path = os.path.join(UPLOAD_DIR, f"temp_{file.filename}")
+    with open(file_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
 
-    # Generate PDF immediately
+    try:
+        transcript = transcribe_audio(file_path)
+        summary_text = summarize_text(transcript)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+    finally:
+        os.remove(file_path)
+
+    action_items = "[Not available — needs NLP tagging]"
+    decisions = "[Not available — needs deeper parsing]"
+
+    meeting_id = insert_meeting(transcript, summary_text, action_items, decisions)
+
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", size=12)
-
-    pdf.cell(200, 10, txt="Meeting Summary", ln=True, align='C')
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 10, "Meeting Summary", ln=True, align='C')
     pdf.ln(10)
-    pdf.multi_cell(0, 10, txt=f"Summary:\n{summary}")
-    pdf.ln(5)
-    pdf.multi_cell(0, 10, txt="Action Items:\n")
-    pdf.ln(5)
-    pdf.multi_cell(0, 10, txt="Decisions:\n")
-    pdf.ln(5)
-    pdf.multi_cell(0, 10, txt=f"Transcript:\n{transcript}")
 
-    pdf_output_path = Path(os.path.join(STATIC_DIR, f"meeting_{meeting_id}_summary.pdf"))
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "Summary:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 10, summary_text)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "Transcript:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 10, transcript)
+
+    pdf_output_path = Path(STATIC_DIR) / f"meeting_{meeting_id}_summary.pdf"
     pdf.output(str(pdf_output_path))
 
-    return JSONResponse(content={
+    return {
         "meeting_id": meeting_id,
         "transcript": transcript,
-        "summary": summary,
+        "summary": summary_text,
         "pdf_link": f"/static/meeting_{meeting_id}_summary.pdf"
-    })
+    }
 
-
-# -------------------------------
-# Endpoint: Export Meeting PDF Report
-# -------------------------------
 @app.get("/export/{meeting_id}")
 async def export_pdf(meeting_id: int):
-    conn = get_meetings_db_connection()
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM meetings WHERE id=?", (meeting_id,))
     row = cursor.fetchone()
     conn.close()
 
-    if row is None:
+    if not row:
         raise HTTPException(status_code=404, detail="Meeting not found")
-    
-    # Generate PDF using FPDF
+
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", size=12)
-
-    # Title
-    pdf.cell(200, 10, txt="Meeting Summary", ln=True, align='C')
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 10, "Meeting Summary", ln=True, align='C')
     pdf.ln(10)
-    
-    # Meeting Summary Section
-    pdf.multi_cell(0, 10, txt=f"Summary: {row['summary']}")
-    pdf.ln(5)
-    pdf.multi_cell(0, 10, txt=f"Action Items: {row['action_items']}")
-    pdf.ln(5)
-    pdf.multi_cell(0, 10, txt=f"Decisions: {row['decisions']}")
-    pdf.ln(5)
-    pdf.multi_cell(0, 10, txt=f"Transcript: {row['transcript']}")
 
-    pdf_output_path = Path(os.path.join(STATIC_DIR, f"meeting_{meeting_id}_summary.pdf"))
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "Summary:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 10, row['summary'])
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "Action Items:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 10, row['action_items'])
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "Decisions:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 10, row['decisions'])
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "Transcript:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 10, row['transcript'])
+
+    pdf_output_path = Path(STATIC_DIR) / f"meeting_{meeting_id}_summary.pdf"
     pdf.output(str(pdf_output_path))
 
-    return {"message": "PDF generated successfully!", "pdf_link": str(pdf_output_path)}
+    return {
+        "message": "PDF generated successfully!",
+        "pdf_link": f"/static/meeting_{meeting_id}_summary.pdf"
+    }
 
-# -------------------------------
-# Endpoint: Search Meetings (by Keyword in Transcript)
-# -------------------------------
+class SearchQuery(BaseModel):
+    query: str
+
 @app.post("/search")
-def search_meetings(query: str):
-    # For search, we use the meetings table (you can adjust if needed)
-    conn = get_meetings_db_connection()
+async def search_meetings(payload: SearchQuery):
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM meetings WHERE transcript LIKE ?", ('%' + query + '%',))
+    cursor.execute(
+        "SELECT id, summary FROM meetings WHERE transcript LIKE ?", ('%' + payload.query + '%',))
     results = cursor.fetchall()
     conn.close()
-    
-    if results:
-        # Convert rows to list of dicts for JSON serialization
-        meetings = [dict(row) for row in results]
-        return {"results": meetings}
-    else:
-        raise HTTPException(status_code=404, detail="No matching transcripts found")
+
+    return {
+        "results": [{"id": row["id"], "summary": row["summary"]} for row in results]
+    }
