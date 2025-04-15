@@ -1,20 +1,22 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+
 import os
-import shutil
 import sqlite3
 from pathlib import Path
 from fpdf import FPDF
 
-# Import functions from your existing modules
 from transcriber import transcribe_audio
 from summarizer import summarize_text
 
-# Initialize FastAPI app
-app = FastAPI()
+UPLOAD_DIR = "uploads"
+STATIC_DIR = "static"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(STATIC_DIR, exist_ok=True)
 
-from fastapi.middleware.cors import CORSMiddleware
+app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,22 +26,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve static files from the STATIC_DIR directory
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# Set up directories
-UPLOAD_DIR = "uploads"
-STATIC_DIR = "static"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(STATIC_DIR, exist_ok=True)
 
-# Database helper for meetings (for transcribed + summarized meetings)
+def extract_sections(summary_text: str):
+    sections = {"summary": "", "action_items": "", "decisions": ""}
+    current = None
+
+    for line in summary_text.splitlines():
+        line = line.strip()
+        if line.lower().startswith("### summary"):
+            current = "summary"
+        elif line.lower().startswith("### action items"):
+            current = "action_items"
+        elif line.lower().startswith("### key decisions"):
+            current = "decisions"
+        elif current and line:
+            sections[current] += line + "\n"
+
+    return sections
+
+
 def get_meetings_db_connection():
-    # We assume that your meetings.db has a table called `meetings` with columns:
-    # id, transcript, summary, action_items, decisions
     conn = sqlite3.connect('meetings.db')
-    conn.row_factory = sqlite3.Row  # to access rows as dicts
+    conn.row_factory = sqlite3.Row
     return conn
+
 
 def insert_meeting(filename: str, transcript: str, summary: str, action_items: str = "", decisions: str = "") -> int:
     conn = get_meetings_db_connection()
@@ -53,41 +65,71 @@ def insert_meeting(filename: str, transcript: str, summary: str, action_items: s
     conn.close()
     return meeting_id
 
-# -------------------------------
-# Endpoint: Process Meeting (Upload → Transcribe → Summarize → Store)
-# -------------------------------
+
 @app.post("/process_meeting")
 async def process_meeting(file: UploadFile = File(...)):
-    # Save the uploaded audio file to the UPLOAD_DIR
     file_location = os.path.join(UPLOAD_DIR, file.filename)
     with open(file_location, "wb") as f:
         f.write(await file.read())
-    
-    # Transcribe the audio using your transcriber (supports multilingual input)
+
     try:
         transcript = transcribe_audio(file_location)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
-    
-    # Summarize the transcript using your summarizer
+
     try:
-        summary = summarize_text(transcript)
+        structured_output = summarize_text(transcript)
+        sections = extract_sections(structured_output)
+        summary = sections["summary"].strip()
+        action_items = sections["action_items"].strip()
+        decisions = sections["decisions"].strip()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Summarization failed: {str(e)}")
-    
-    # Insert into meetings database (action items & decisions left empty, can be enhanced later)
-    meeting_id = insert_meeting(file.filename, transcript, summary, action_items="", decisions="")
+
+    meeting_id = insert_meeting(file.filename, transcript, summary, action_items, decisions)
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 10, "Meeting Summary", ln=True, align='C')
+    pdf.ln(10)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "Summary:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 10, summary)
+    pdf.ln(5)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "Action Items:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 10, action_items)
+    pdf.ln(5)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "Decisions:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 10, decisions)
+    pdf.ln(5)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "Transcript:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 10, transcript)
+
+    pdf_output_path = Path(os.path.join(STATIC_DIR, f"meeting_{meeting_id}_summary.pdf"))
+    pdf.output(str(pdf_output_path))
 
     return JSONResponse(content={
         "meeting_id": meeting_id,
         "transcript": transcript,
         "summary": summary,
+        "action_items": action_items,
+        "decisions": decisions,
         "pdf_link": f"/static/meeting_{meeting_id}_summary.pdf"
     })
 
-# -------------------------------
-# Endpoint: Export Meeting PDF Report
-# -------------------------------
+
 @app.get("/export/{meeting_id}")
 async def export_pdf(meeting_id: int):
     conn = get_meetings_db_connection()
@@ -98,26 +140,40 @@ async def export_pdf(meeting_id: int):
 
     if row is None:
         raise HTTPException(status_code=404, detail="Meeting not found")
-    
-    # Generate PDF using FPDF
+
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", size=12)
-
-    # Title
-    pdf.cell(200, 10, txt="Meeting Summary", ln=True, align='C')
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 10, "Meeting Summary", ln=True, align='C')
     pdf.ln(10)
-    
-    # Meeting Summary Section
-    pdf.multi_cell(0, 10, txt=f"Summary: {row['summary']}")
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "Summary:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 10, row['summary'])
     pdf.ln(5)
-    pdf.multi_cell(0, 10, txt=f"Action Items: {row['action_items']}")
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "Action Items:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 10, row['action_items'])
     pdf.ln(5)
-    pdf.multi_cell(0, 10, txt=f"Decisions: {row['decisions']}")
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "Decisions:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 10, row['decisions'])
     pdf.ln(5)
-    pdf.multi_cell(0, 10, txt=f"Transcript: {row['transcript']}")
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "Transcript:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 10, row['transcript'])
 
     pdf_output_path = Path(os.path.join(STATIC_DIR, f"meeting_{meeting_id}_summary.pdf"))
     pdf.output(str(pdf_output_path))
 
-    return {"message": "PDF generated successfully!", "pdf_link": f"/static/meeting_{meeting_id}_summary.pdf"}
+    return {
+        "message": "PDF generated successfully!",
+        "pdf_link": f"/static/meeting_{meeting_id}_summary.pdf"
+    }
